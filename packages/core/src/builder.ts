@@ -1,12 +1,25 @@
 import type { SagaContext, SagaStep, ParallelStepGroup } from './types.js';
 
 /**
+ * Top-level metadata for a saga, used by AI framework wrappers to generate
+ * tool schemas (e.g. LangChain, Vercel AI SDK).
+ */
+export interface SagaMetadata {
+  /** Machine-friendly identifier for the saga (used as the tool name). */
+  name: string;
+  /** Human-readable description of what the saga does (used as the tool description). */
+  description: string;
+}
+
+/**
  * Immutable snapshot produced by {@link SagaBuilder.build}.
  * Contains the ordered list of steps (or parallel step groups) ready for an executor.
  */
 export interface SagaDefinition<TContext extends SagaContext = SagaContext> {
   /** Ordered, immutable array of saga steps or parallel step groups. */
   readonly steps: ReadonlyArray<SagaStep<unknown, TContext> | ParallelStepGroup<TContext>>;
+  /** Optional top-level metadata consumed by AI framework wrappers. */
+  readonly metadata?: SagaMetadata;
 }
 
 /**
@@ -90,14 +103,18 @@ export class SagaBuilder<TContext extends SagaContext = SagaContext> {
   /**
    * Finalise the builder and return an immutable {@link SagaDefinition}.
    *
+   * @param metadata - Optional top-level metadata (name + description) used by
+   *   AI framework wrappers such as `@agentic-sage/langchain` and
+   *   `@agentic-sage/vercel-ai` to auto-generate tool schemas.
    * @throws {Error} If no steps have been added.
    */
-  build(): SagaDefinition<TContext> {
+  build(metadata?: SagaMetadata): SagaDefinition<TContext> {
     if (this._steps.length === 0) {
       throw new Error('SagaBuilder: cannot build a saga with no steps.');
     }
     return {
       steps: Object.freeze([...this._steps]),
+      ...(metadata !== undefined ? { metadata } : {}),
     };
   }
 
