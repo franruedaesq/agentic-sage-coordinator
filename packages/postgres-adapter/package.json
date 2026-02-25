@@ -1,0 +1,62 @@
+{
+  "name": "@agentic-sage/postgres-adapter",
+  "version": "0.1.0",
+  "description": "PostgreSQL-backed SagaStateAdapter for @agentic-sage/core, powered by Drizzle ORM.",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/esm/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build": "npm run build:esm && npm run build:cjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage"
+  },
+  "keywords": [
+    "saga",
+    "postgres",
+    "postgresql",
+    "drizzle",
+    "adapter",
+    "persistence",
+    "distributed-systems"
+  ],
+  "author": "franruedaesq",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/franruedaesq/agentic-sage-coordinator.git",
+    "directory": "packages/postgres-adapter"
+  },
+  "peerDependencies": {
+    "@agentic-sage/core": ">=0.1.0",
+    "drizzle-orm": ">=0.30.0",
+    "typescript": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@agentic-sage/core": "*",
+    "@types/node": "^22.0.0",
+    "drizzle-orm": "^0.38.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
