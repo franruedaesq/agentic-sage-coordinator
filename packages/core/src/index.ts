@@ -1,4 +1,4 @@
-export type { SagaContext, SagaStep, SagaStepMetadata } from './types.js';
+export type { SagaContext, SagaStep, SagaStepMetadata, ParallelStepGroup, Logger } from './types.js';
 export type {
   RunOptions,
   ExecutionPlanStep,
@@ -15,6 +15,7 @@ export type { SagaDefinition } from './builder.js';
 export { SagaExecutor } from './executor.js';
 export type { SagaStateAdapter, StepState } from './persistence.js';
 export { InMemoryAdapter } from './persistence.js';
+export { SerializationError, isJsonSerializable, assertJsonSerializable } from './serialization.js';
 
 // ---------------------------------------------------------------------------
 // Action templates – copy-and-customise starting points for common steps

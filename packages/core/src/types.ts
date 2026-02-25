@@ -117,6 +117,8 @@ export interface ExecutionPlanStep {
   description?: string;
   /** Whether this step is configured to be skipped during a dry-run. */
   skipOnDryRun?: boolean;
+  /** True when this step belongs to a parallel group (added via `addParallelSteps`). */
+  parallel?: boolean;
 }
 
 /**
@@ -137,6 +139,45 @@ export interface PendingApprovalResult {
   readonly status: 'pending_approval';
   /** Name of the step that is waiting for approval. */
   readonly stepName: string;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Parallel step groups
+// ---------------------------------------------------------------------------
+
+/**
+ * A group of saga steps that are executed concurrently via `Promise.allSettled()`.
+ * Created via {@link SagaBuilder.addParallelSteps}.
+ *
+ * If any step in the group fails, all successfully completed steps (within the
+ * group and all prior sequential steps) are compensated in reverse order.
+ */
+export interface ParallelStepGroup<TContext extends SagaContext = SagaContext> {
+  /** Marker that identifies this entry as a parallel group. */
+  readonly parallel: true;
+  /** Steps to run concurrently. */
+  readonly steps: ReadonlyArray<SagaStep<unknown, TContext>>;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Logger interface
+// ---------------------------------------------------------------------------
+
+/**
+ * Standard logger interface accepted by {@link SagaExecutor}.
+ * Compatible with popular loggers such as Winston and Pino.
+ *
+ * @example
+ * ```typescript
+ * import pino from 'pino';
+ * const executor = new SagaExecutor(saga, ctx, adapter, pino());
+ * ```
+ */
+export interface Logger {
+  info(message: string, meta?: Record<string, unknown>): void;
+  warn(message: string, meta?: Record<string, unknown>): void;
+  error(message: string, meta?: Record<string, unknown>): void;
+  debug(message: string, meta?: Record<string, unknown>): void;
 }
 
 // ---------------------------------------------------------------------------
