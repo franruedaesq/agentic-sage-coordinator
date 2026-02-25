@@ -1,36 +1,21 @@
 {
   "name": "agentic-sage-coordinator",
   "version": "0.1.0",
-  "description": "A zero-dependency, pure TypeScript control flow library implementing the Saga pattern for AI agent orchestration.",
-  "main": "dist/cjs/index.js",
-  "module": "dist/esm/index.js",
-  "types": "dist/esm/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js",
-      "types": "./dist/esm/index.d.ts"
-    },
-    "./templates": {
-      "import": "./dist/esm/templates/index.js",
-      "require": "./dist/cjs/templates/index.js",
-      "types": "./dist/esm/templates/index.d.ts"
-    }
-  },
-  "files": [
-    "dist"
+  "description": "Monorepo root for agentic-sage-coordinator packages.",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "build:esm": "tsc -p tsconfig.esm.json",
-    "build:cjs": "tsc -p tsconfig.cjs.json",
-    "build": "npm run build:esm && npm run build:cjs",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "tsc --noEmit",
-    "coverage": "vitest run --coverage"
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "lint": "eslint packages/core/src",
+    "format": "prettier --write \"packages/*/src/**/*.ts\"",
+    "format:check": "prettier --check \"packages/*/src/**/*.ts\""
   },
   "keywords": [
     "saga",
@@ -47,17 +32,14 @@
     "type": "git",
     "url": "https://github.com/franruedaesq/agentic-sage-coordinator.git"
   },
-  "peerDependencies": {
-    "typescript": ">=5.0.0"
-  },
-  "peerDependenciesMeta": {
-    "typescript": {
-      "optional": true
-    }
-  },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
     "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^10.0.0",
+    "prettier": "^3.0.0",
     "typescript": "^5.5.0",
+    "typescript-eslint": "^8.0.0",
     "vitest": "^2.0.0"
   }
 }
