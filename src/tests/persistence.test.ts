@@ -339,8 +339,8 @@ describe('SagaExecutor – default InMemoryAdapter', () => {
     const step = makeStep('step-1', 'value');
     const definition = new SagaBuilder().addStep(step).build();
     const ctx = makeCtx();
-    const result = await new SagaExecutor(definition, ctx).run();
-    expect(result.results['step-1']).toBe('value');
+    await new SagaExecutor(definition, ctx).run();
+    expect(ctx.results['step-1']).toBe('value');
   });
 });
 

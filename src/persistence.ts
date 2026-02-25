@@ -3,7 +3,7 @@
  */
 export interface StepState {
   /** Execution status of the operation. */
-  status: 'completed' | 'compensated';
+  status: 'completed' | 'compensated' | 'pending_approval';
   /** Result value stored for idempotent replay (only set for 'completed' execute steps). */
   result?: unknown;
 }
