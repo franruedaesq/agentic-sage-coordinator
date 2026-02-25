@@ -1,12 +1,12 @@
-import type { SagaContext, SagaStep } from './types.js';
+import type { SagaContext, SagaStep, ParallelStepGroup } from './types.js';
 
 /**
  * Immutable snapshot produced by {@link SagaBuilder.build}.
- * Contains the ordered list of steps ready for an executor.
+ * Contains the ordered list of steps (or parallel step groups) ready for an executor.
  */
 export interface SagaDefinition<TContext extends SagaContext = SagaContext> {
-  /** Ordered, immutable array of saga steps. */
-  readonly steps: ReadonlyArray<SagaStep<unknown, TContext>>;
+  /** Ordered, immutable array of saga steps or parallel step groups. */
+  readonly steps: ReadonlyArray<SagaStep<unknown, TContext> | ParallelStepGroup<TContext>>;
 }
 
 /**
@@ -26,7 +26,7 @@ export interface SagaDefinition<TContext extends SagaContext = SagaContext> {
  * ```
  */
 export class SagaBuilder<TContext extends SagaContext = SagaContext> {
-  private readonly _steps: Array<SagaStep<unknown, TContext>> = [];
+  private readonly _steps: Array<SagaStep<unknown, TContext> | ParallelStepGroup<TContext>> = [];
 
   /**
    * Append a step to the saga.
@@ -36,13 +36,54 @@ export class SagaBuilder<TContext extends SagaContext = SagaContext> {
    * @throws {Error} If a step with the same `name` has already been added.
    */
   addStep<TResult>(step: SagaStep<TResult, TContext>): this {
-    const duplicate = this._steps.some((s) => s.name === step.name);
-    if (duplicate) {
+    if (this._hasName(step.name)) {
       throw new Error(
         `SagaBuilder: a step named "${step.name}" has already been added. Step names must be unique.`,
       );
     }
     this._steps.push(step as SagaStep<unknown, TContext>);
+    return this;
+  }
+
+  /**
+   * Append a group of steps that will be executed **concurrently** by the
+   * executor via `Promise.allSettled()`.
+   *
+   * Use this for side-effects that are independent of each other (e.g. sending
+   * an email and syncing a CRM record at the same time).  If any step in the
+   * group fails, all successfully completed steps in the group — plus every
+   * prior sequential step — are compensated in reverse order.
+   *
+   * Returns `this` to allow fluent chaining.
+   *
+   * @param steps - An array of {@link SagaStep} objects to run in parallel.
+   * @throws {Error} If `steps` is empty.
+   * @throws {Error} If any step name duplicates one that was already added.
+   *
+   * @example
+   * ```typescript
+   * const saga = new SagaBuilder<OrderContext>()
+   *   .addStep(reserveFundsStep)
+   *   .addParallelSteps([sendEmailStep, syncCrmStep])
+   *   .addStep(issueReceiptStep)
+   *   .build();
+   * ```
+   */
+  addParallelSteps<TResult>(steps: Array<SagaStep<TResult, TContext>>): this {
+    if (steps.length === 0) {
+      throw new Error('SagaBuilder: addParallelSteps() requires at least one step.');
+    }
+    for (const step of steps) {
+      if (this._hasName(step.name)) {
+        throw new Error(
+          `SagaBuilder: a step named "${step.name}" has already been added. Step names must be unique.`,
+        );
+      }
+    }
+    this._steps.push({
+      parallel: true,
+      steps: Object.freeze([...steps]) as ReadonlyArray<SagaStep<unknown, TContext>>,
+    });
     return this;
   }
 
@@ -58,5 +99,15 @@ export class SagaBuilder<TContext extends SagaContext = SagaContext> {
     return {
       steps: Object.freeze([...this._steps]),
     };
+  }
+
+  /** Returns `true` if `name` is already present (in a sequential or parallel entry). */
+  private _hasName(name: string): boolean {
+    return this._steps.some((entry) => {
+      if ('parallel' in entry) {
+        return entry.steps.some((s) => s.name === name);
+      }
+      return entry.name === name;
+    });
   }
 }

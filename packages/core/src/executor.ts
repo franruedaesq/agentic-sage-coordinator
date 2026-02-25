@@ -1,4 +1,4 @@
-import type { SagaContext, SagaStep } from './types.js';
+import type { SagaContext, SagaStep, ParallelStepGroup, Logger } from './types.js';
 import { SagaCompensationError, PendingApprovalError } from './types.js';
 import type {
   RunOptions,
@@ -12,6 +12,7 @@ import type {
 import type { SagaDefinition } from './builder.js';
 import type { SagaStateAdapter } from './persistence.js';
 import { InMemoryAdapter } from './persistence.js';
+import { assertJsonSerializable } from './serialization.js';
 
 /** Default number of compensation retry attempts when not specified on the step. */
 const DEFAULT_COMPENSATION_RETRIES = 3;
@@ -51,6 +52,7 @@ export class SagaExecutor<TContext extends SagaContext = SagaContext> {
   private readonly _definition: SagaDefinition<TContext>;
   private readonly _context: TContext;
   private readonly _adapter: SagaStateAdapter;
+  private readonly _logger: Logger | undefined;
 
   private readonly _beforeStepHooks: Array<BeforeStepHook<TContext>> = [];
   private readonly _afterStepHooks: Array<AfterStepHook<TContext>> = [];
@@ -61,10 +63,12 @@ export class SagaExecutor<TContext extends SagaContext = SagaContext> {
     definition: SagaDefinition<TContext>,
     context: TContext,
     adapter?: SagaStateAdapter,
+    logger?: Logger,
   ) {
     this._definition = definition;
     this._context = context;
     this._adapter = adapter ?? new InMemoryAdapter();
+    this._logger = logger;
   }
 
   // ---------------------------------------------------------------------------
@@ -138,13 +142,27 @@ export class SagaExecutor<TContext extends SagaContext = SagaContext> {
       return this._dryRun();
     }
 
+    this._logger?.info('saga:start');
+
     const completed: Array<{
       step: SagaStep<unknown, TContext>;
       result: unknown;
       idemKey: string;
     }> = [];
 
-    for (const step of this._definition.steps) {
+    for (const entry of this._definition.steps) {
+      // Parallel step group
+      if ('parallel' in entry && entry.parallel) {
+        const pendingResult = await this._executeParallelGroup(
+          entry as ParallelStepGroup<TContext>,
+          completed,
+        );
+        if (pendingResult) return pendingResult;
+        continue;
+      }
+
+      // Sequential step
+      const step = entry as SagaStep<unknown, TContext>;
       const idemKey = step.metadata?.idempotencyKey ?? step.name;
       try {
         const existing = await this._adapter.loadState(idemKey);
@@ -160,9 +178,13 @@ export class SagaExecutor<TContext extends SagaContext = SagaContext> {
           for (const hook of this._beforeStepHooks) {
             await hook(step.name, this._context);
           }
+          this._logger?.debug('step:start', { stepName: step.name });
           result = await step.execute(this._context);
+          // Serialization guardrail: validate result before persisting.
+          assertJsonSerializable(result, step.name);
           // Checkpoint: persist state after a successful execute.
           await this._adapter.saveState(idemKey, { status: 'completed', result });
+          this._logger?.info('step:complete', { stepName: step.name });
           // Invoke lifecycle after-hook.
           for (const hook of this._afterStepHooks) {
             await hook(step.name, result, this._context);
@@ -175,6 +197,7 @@ export class SagaExecutor<TContext extends SagaContext = SagaContext> {
         for (const hook of this._errorHooks) {
           await hook(step.name, err, this._context);
         }
+        this._logger?.error('step:error', { stepName: step.name, error: String(err) });
         if (err instanceof PendingApprovalError) {
           // HITL: pause the saga – save state, do NOT roll back.
           await this._adapter.saveState(idemKey, { status: 'pending_approval' });
@@ -189,6 +212,7 @@ export class SagaExecutor<TContext extends SagaContext = SagaContext> {
       }
     }
 
+    this._logger?.info('saga:complete');
     return this._context;
   }
 
@@ -212,7 +236,9 @@ export class SagaExecutor<TContext extends SagaContext = SagaContext> {
       throw new Error('SagaExecutor: no pending step found. Cannot resume.');
     }
     const stepName = pending.result as string;
-    const step = this._definition.steps.find((s) => s.name === stepName);
+    const step = this._definition.steps.find(
+      (s): s is SagaStep<unknown, TContext> => !('parallel' in s) && s.name === stepName,
+    );
     if (!step) {
       throw new Error(`SagaExecutor: pending step "${stepName}" not found in definition.`);
     }
@@ -232,14 +258,111 @@ export class SagaExecutor<TContext extends SagaContext = SagaContext> {
 
   /** Build and return the dry-run execution plan without executing any steps. */
   private _dryRun(): DryRunResult {
-    return {
-      dryRun: true,
-      plan: this._definition.steps.map((step) => ({
-        name: step.name,
-        description: step.metadata?.description,
-        skipOnDryRun: step.metadata?.skipOnDryRun,
-      })),
-    };
+    const plan: Array<{
+      name: string;
+      description?: string;
+      skipOnDryRun?: boolean;
+      parallel?: boolean;
+    }> = [];
+
+    for (const entry of this._definition.steps) {
+      if ('parallel' in entry && entry.parallel) {
+        for (const step of entry.steps) {
+          plan.push({
+            name: step.name,
+            description: step.metadata?.description,
+            skipOnDryRun: step.metadata?.skipOnDryRun,
+            parallel: true,
+          });
+        }
+      } else {
+        const step = entry as SagaStep<unknown, TContext>;
+        plan.push({
+          name: step.name,
+          description: step.metadata?.description,
+          skipOnDryRun: step.metadata?.skipOnDryRun,
+        });
+      }
+    }
+
+    return { dryRun: true, plan: Object.freeze(plan) };
+  }
+
+  /**
+   * Run all steps in a parallel group concurrently via `Promise.allSettled()`.
+   * Successfully completed steps are appended to `completed` for rollback
+   * tracking.  If any step fails, all completed steps (including prior
+   * sequential ones) are rolled back and the first encountered error is
+   * re-thrown.
+   *
+   * @returns A {@link PendingApprovalResult} if a step is pending approval,
+   *   or `undefined` when the group completes successfully.
+   */
+  private async _executeParallelGroup(
+    group: ParallelStepGroup<TContext>,
+    completed: Array<{ step: SagaStep<unknown, TContext>; result: unknown; idemKey: string }>,
+  ): Promise<PendingApprovalResult | undefined> {
+    this._logger?.debug('parallel-group:start', { steps: group.steps.map((s) => s.name) });
+
+    const settled = await Promise.allSettled(
+      group.steps.map(async (step) => {
+        const idemKey = step.metadata?.idempotencyKey ?? step.name;
+        const existing = await this._adapter.loadState(idemKey);
+        let result: unknown;
+        if (existing?.status === 'completed') {
+          result = existing.result;
+        } else if (existing?.status === 'pending_approval') {
+          throw new PendingApprovalError();
+        } else {
+          for (const hook of this._beforeStepHooks) {
+            await hook(step.name, this._context);
+          }
+          this._logger?.debug('step:start', { stepName: step.name, parallel: true });
+          result = await step.execute(this._context);
+          // Serialization guardrail: validate result before persisting.
+          assertJsonSerializable(result, step.name);
+          await this._adapter.saveState(idemKey, { status: 'completed', result });
+          this._logger?.info('step:complete', { stepName: step.name, parallel: true });
+          for (const hook of this._afterStepHooks) {
+            await hook(step.name, result, this._context);
+          }
+        }
+        this._context.results[step.name] = result;
+        return { step, result, idemKey };
+      }),
+    );
+
+    let hasError = false;
+    let firstError: unknown;
+
+    for (let i = 0; i < settled.length; i++) {
+      const settlement = settled[i];
+      const step = group.steps[i];
+      if (settlement.status === 'fulfilled') {
+        completed.push(settlement.value);
+      } else {
+        for (const hook of this._errorHooks) {
+          await hook(step.name, settlement.reason, this._context);
+        }
+        this._logger?.error('step:error', {
+          stepName: step.name,
+          parallel: true,
+          error: String(settlement.reason),
+        });
+        if (!hasError) {
+          hasError = true;
+          firstError = settlement.reason;
+        }
+      }
+    }
+
+    if (hasError) {
+      await this._rollback(completed);
+      throw firstError;
+    }
+
+    this._logger?.debug('parallel-group:complete', { steps: group.steps.map((s) => s.name) });
+    return undefined;
   }
 
   /**
@@ -281,6 +404,7 @@ export class SagaExecutor<TContext extends SagaContext = SagaContext> {
           for (const hook of this._compensationHooks) {
             await hook(step.name, result, this._context);
           }
+          this._logger?.info('step:compensate', { stepName: step.name });
           // Checkpoint: persist state after a successful compensate.
           await this._adapter.saveState(compensateKey, { status: 'compensated' });
           succeeded = true;
