@@ -1,4 +1,25 @@
 /**
+ * Thrown when one or more compensation (rollback) functions fail after all
+ * configured retries are exhausted.  This signals a potentially compromised
+ * state that requires manual intervention.
+ */
+export class SagaCompensationError extends Error {
+  /** The name of the step whose compensation failed. */
+  readonly stepName: string;
+  /** The original error thrown by the `compensate()` function. */
+  readonly cause: unknown;
+
+  constructor(stepName: string, cause: unknown) {
+    super(
+      `SagaCompensationError: compensation for step "${stepName}" failed after all retries. Manual intervention may be required.`,
+    );
+    this.name = 'SagaCompensationError';
+    this.stepName = stepName;
+    this.cause = cause;
+  }
+}
+
+/**
  * Metadata associated with a single saga step.
  */
 export interface SagaStepMetadata {

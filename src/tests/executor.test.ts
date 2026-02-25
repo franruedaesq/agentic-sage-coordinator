@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { SagaBuilder } from '../builder.js';
 import { SagaExecutor } from '../executor.js';
 import type { SagaContext, SagaStep } from '../types.js';
+import { SagaCompensationError } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -200,5 +201,199 @@ describe('SagaExecutor – context passing', () => {
     expect(seenContexts[0]).toBe(ctx);
     expect(seenContexts[1]).toBe(ctx);
     expect(seenContexts[2]).toBe(ctx);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SagaExecutor – rollback (compensation) on step failure
+// ---------------------------------------------------------------------------
+
+describe('SagaExecutor – rollback on failure', () => {
+  it('compensates completed steps in reverse order when a step throws', async () => {
+    const compensateOrder: string[] = [];
+
+    const makeRollbackStep = (name: string): SagaStep<void, SagaContext> => ({
+      name,
+      execute: vi.fn(async () => undefined),
+      compensate: vi.fn(async () => {
+        compensateOrder.push(name);
+      }),
+    });
+
+    const step1 = makeRollbackStep('step-1');
+    const step2 = makeRollbackStep('step-2');
+    const step3: SagaStep<void, SagaContext> = {
+      name: 'step-3',
+      execute: vi.fn(async () => {
+        throw new Error('step-3 failed');
+      }),
+      compensate: vi.fn(async () => undefined),
+    };
+    const step4 = makeRollbackStep('step-4');
+
+    const definition = new SagaBuilder()
+      .addStep(step1)
+      .addStep(step2)
+      .addStep(step3)
+      .addStep(step4)
+      .build();
+
+    await expect(new SagaExecutor(definition, makeCtx()).run()).rejects.toThrow('step-3 failed');
+
+    // step-2 compensated before step-1; step-3 and step-4 not compensated
+    expect(compensateOrder).toEqual(['step-2', 'step-1']);
+    expect(step3.compensate).not.toHaveBeenCalled();
+    expect(step4.compensate).not.toHaveBeenCalled();
+  });
+
+  it('does not call compensate on any step when the first step fails', async () => {
+    const step1: SagaStep<void, SagaContext> = {
+      name: 'step-1',
+      execute: vi.fn(async () => {
+        throw new Error('first step failed');
+      }),
+      compensate: vi.fn(async () => undefined),
+    };
+    const step2 = makeStep('step-2', undefined);
+
+    const definition = new SagaBuilder().addStep(step1).addStep(step2).build();
+
+    await expect(new SagaExecutor(definition, makeCtx()).run()).rejects.toThrow(
+      'first step failed',
+    );
+
+    expect(step1.compensate).not.toHaveBeenCalled();
+    expect(step2.execute).not.toHaveBeenCalled();
+    expect(step2.compensate).not.toHaveBeenCalled();
+  });
+
+  it('passes the step result to compensate()', async () => {
+    const step1: SagaStep<{ id: number }, SagaContext> = {
+      name: 'step-1',
+      execute: vi.fn(async () => ({ id: 42 })),
+      compensate: vi.fn(async () => undefined),
+    };
+    const step2: SagaStep<void, SagaContext> = {
+      name: 'step-2',
+      execute: vi.fn(async () => {
+        throw new Error('oops');
+      }),
+      compensate: vi.fn(async () => undefined),
+    };
+
+    const definition = new SagaBuilder().addStep(step1).addStep(step2).build();
+    await expect(new SagaExecutor(definition, makeCtx()).run()).rejects.toThrow('oops');
+
+    expect(step1.compensate).toHaveBeenCalledWith(expect.anything(), { id: 42 });
+  });
+
+  it('re-throws the original step error after rollback', async () => {
+    const originalError = new Error('original failure');
+    const step1 = makeStep('step-1', undefined);
+    const step2: SagaStep<void, SagaContext> = {
+      name: 'step-2',
+      execute: vi.fn(async () => {
+        throw originalError;
+      }),
+      compensate: vi.fn(async () => undefined),
+    };
+
+    const definition = new SagaBuilder().addStep(step1).addStep(step2).build();
+    await expect(new SagaExecutor(definition, makeCtx()).run()).rejects.toBe(originalError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SagaExecutor – compensation failures and retries
+// ---------------------------------------------------------------------------
+
+describe('SagaExecutor – compensation failure handling', () => {
+  it('throws SagaCompensationError when compensate() always fails', async () => {
+    const step1: SagaStep<void, SagaContext> = {
+      name: 'step-1',
+      execute: vi.fn(async () => undefined),
+      compensate: vi.fn(async () => {
+        throw new Error('compensation failed');
+      }),
+      metadata: { compensationRetries: 0 },
+    };
+    const step2: SagaStep<void, SagaContext> = {
+      name: 'step-2',
+      execute: vi.fn(async () => {
+        throw new Error('step-2 execute failed');
+      }),
+      compensate: vi.fn(async () => undefined),
+    };
+
+    const definition = new SagaBuilder().addStep(step1).addStep(step2).build();
+    const err = await new SagaExecutor(definition, makeCtx()).run().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SagaCompensationError);
+    expect((err as SagaCompensationError).stepName).toBe('step-1');
+  });
+
+  it('SagaCompensationError has the correct name', async () => {
+    const err = new SagaCompensationError('my-step', new Error('cause'));
+    expect(err.name).toBe('SagaCompensationError');
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it('retries compensation the configured number of times before throwing SagaCompensationError', async () => {
+    const compensateFn = vi.fn(async () => {
+      throw new Error('always fails');
+    });
+
+    const step1: SagaStep<void, SagaContext> = {
+      name: 'step-1',
+      execute: vi.fn(async () => undefined),
+      compensate: compensateFn,
+      metadata: { compensationRetries: 2 },
+    };
+    const step2: SagaStep<void, SagaContext> = {
+      name: 'step-2',
+      execute: vi.fn(async () => {
+        throw new Error('step-2 failed');
+      }),
+      compensate: vi.fn(async () => undefined),
+    };
+
+    const definition = new SagaBuilder().addStep(step1).addStep(step2).build();
+    await expect(new SagaExecutor(definition, makeCtx()).run()).rejects.toBeInstanceOf(
+      SagaCompensationError,
+    );
+
+    // 1 initial attempt + 2 retries = 3 total calls
+    expect(compensateFn).toHaveBeenCalledTimes(3);
+  });
+
+  it('succeeds without throwing when compensation succeeds on a retry', async () => {
+    let callCount = 0;
+    const compensateFn = vi.fn(async () => {
+      callCount++;
+      if (callCount < 3) throw new Error('transient');
+    });
+
+    const step1: SagaStep<void, SagaContext> = {
+      name: 'step-1',
+      execute: vi.fn(async () => undefined),
+      compensate: compensateFn,
+      metadata: { compensationRetries: 3 },
+    };
+    const step2: SagaStep<void, SagaContext> = {
+      name: 'step-2',
+      execute: vi.fn(async () => {
+        throw new Error('step-2 failed');
+      }),
+      compensate: vi.fn(async () => undefined),
+    };
+
+    const definition = new SagaBuilder().addStep(step1).addStep(step2).build();
+
+    // Should reject with the original step error, NOT a SagaCompensationError,
+    // because compensation eventually succeeded.
+    const err = await new SagaExecutor(definition, makeCtx()).run().catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(SagaCompensationError);
+    expect((err as Error).message).toBe('step-2 failed');
+    expect(compensateFn).toHaveBeenCalledTimes(3);
   });
 });
