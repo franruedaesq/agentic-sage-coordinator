@@ -1,0 +1,33 @@
+{
+  "name": "agentic-sage-coordinator",
+  "version": "0.1.0",
+  "description": "A zero-dependency, pure TypeScript control flow library implementing the Saga pattern for AI agent orchestration.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "coverage": "vitest run --coverage"
+  },
+  "keywords": [
+    "saga",
+    "ai",
+    "agent",
+    "orchestration",
+    "typescript",
+    "compensation",
+    "distributed-systems"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
