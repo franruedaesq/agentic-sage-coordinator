@@ -2,13 +2,31 @@
   "name": "agentic-sage-coordinator",
   "version": "0.1.0",
   "description": "A zero-dependency, pure TypeScript control flow library implementing the Saga pattern for AI agent orchestration.",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/esm/index.d.ts"
+    },
+    "./templates": {
+      "import": "./dist/esm/templates/index.js",
+      "require": "./dist/cjs/templates/index.js",
+      "types": "./dist/esm/templates/index.d.ts"
+    }
+  },
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "build": "tsc",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build": "npm run build:esm && npm run build:cjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
@@ -23,8 +41,20 @@
     "compensation",
     "distributed-systems"
   ],
-  "author": "",
+  "author": "franruedaesq",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/franruedaesq/agentic-sage-coordinator.git"
+  },
+  "peerDependencies": {
+    "typescript": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0",
